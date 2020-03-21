@@ -7,7 +7,7 @@ import Linear.Vector
 
 main :: IO ()
 main = do
-  let ppm = render 200 100
+  let ppm = render 200 100 100
   printPPM ppm
 
 data PPM = PPM
@@ -27,6 +27,15 @@ data Sphere = Sphere
   }
 
 data HitRecord = Hit Float (V3 Float) (V3 Float) | Miss -- Hit t p normal
+
+data Camera = Camera
+  { lowerLeftC  :: V3 Float
+  , horizontalC :: V3 Float
+  , verticalC   :: V3 Float
+  , originC     :: V3 Float
+  }
+
+
 --Functions for PPM
 printPPM :: PPM -> IO ()
 printPPM (PPM w h d) = do
@@ -55,16 +64,21 @@ color ray@(Ray _ d) spheres = case hitRecord of
   where hitRecord = hitSpheres'' spheres ray 0.0 maxFloat
         maxFloat = 100000.0 --This isn't right
 
---Standalone Things
-render :: Int -> Int -> PPM
-render x y = PPM x y $ renderData x y
+--Functions for Camera
+getRay :: Camera -> Float -> Float -> Ray --Camera u v ray
+getRay (Camera llc horz vert o) u v = Ray o (llc + u *^ horz + v*^vert - o)
 
-renderData :: Int -> Int -> [V3 Int]
-renderData x y = do
+--Standalone Things
+render :: Int -> Int -> Int -> PPM --x y s
+render x y s = PPM x y $ renderData x y s
+
+renderData :: Int -> Int -> Int -> [V3 Int] --x y s
+renderData x y s = do
   let lowerLeft = V3 (-2.0) (-1.0) (-1.0)
   let horizontal = V3 4.0 0.0 0.0
   let vertical = V3 0.0 2.0 0.0
   let orgn = V3 0.0 0.0 0.0
+  let camera = Camera lowerLeft horizontal vertical orgn
   let spheres =
         [Sphere (V3 0.0 0.0 (-1.0)) 0.5
         ,Sphere (V3 0.0 (-100.5) (-1.0)) 100
@@ -72,14 +86,28 @@ renderData x y = do
   y' <- [y-1,y-2..0]
   x' <- [0..x-1]
  
-  let u = fromIntegral x' / fromIntegral x
-  let v = fromIntegral y' / fromIntegral y
-  let ray = Ray orgn (lowerLeft + u *^ horizontal + v *^ vertical)
-  let col = color ray spheres
+  let col = antialiasCol camera spheres x y s x' y'
   let r = truncate $ 255.99 * col ^. _x
   let g = truncate $ 255.99 * col ^. _y
   let b = truncate $ 255.99 * col ^. _z
   return $ V3 r g b
+
+antialiasColOld :: Camera -> [Sphere] -> Int -> Int -> Int -> Int -> Int -> V3 Float -- x y s x' y' -> col
+antialiasColOld (Camera lowerLeft horizontal vertical orgn) spheres x y s x' y' = color ray spheres
+  where u = fromIntegral x' / fromIntegral x
+        v = fromIntegral y' / fromIntegral y
+        ray = Ray orgn (lowerLeft + u *^ horizontal + v *^ vertical)
+
+antialiasCol :: Camera -> [Sphere] -> Int -> Int -> Int -> Int -> Int -> V3 Float -- x y s x' y' -> col
+antialiasCol cam spheres x y s x' y' = (antialiasCol' cam spheres x y s x' y' s (V3 0.0 0.0 0.0)) ^/ fromIntegral s
+
+antialiasCol' :: Camera -> [Sphere] -> Int -> Int -> Int -> Int -> Int -> Int -> V3 Float -> V3 Float -- x y s x' y' s' curCol -> col
+antialiasCol' _ _ _ _ _ _ _ 0 curCol = curCol
+antialiasCol' cam spheres x y s x' y' s' curCol = antialiasCol' cam spheres x y s x' y' (s' - 1) newCol
+  where u = fromIntegral x' / fromIntegral x --TODO Add random here
+        v = fromIntegral y' / fromIntegral y --TODO Add random here
+        r = getRay cam u v
+        newCol = color r spheres + curCol
 
 hitSphere :: Sphere -> Ray -> Float -> Float -> HitRecord
 hitSphere sphere@(Sphere centerArg radiusArg) ray tMin tMax =
