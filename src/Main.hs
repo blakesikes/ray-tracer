@@ -4,11 +4,58 @@ import Control.Lens
 import Linear.Metric
 import Linear.V3
 import Linear.Vector
+import System.Random
 
 main :: IO ()
 main = do
-  let ppm = render 200 100
+  let screen = Screen 200 100 100
+  let lowerLeft = V3 (-2.0) (-1.0) (-1.0)
+  let horizontal = V3 4.0 0.0 0.0
+  let vertical = V3 0.0 2.0 0.0
+  let orgn = V3 0.0 0.0 0.0
+  let camera = Camera lowerLeft horizontal vertical orgn
+  let world =
+        [Sphere (V3 0.0 0.0 (-1.0)) 0.5
+        ,Sphere (V3 0.0 (-100.5) (-1.0)) 100
+        ]
+  gen <- getStdGen
+  let randList = randomRs (0.0,1.0) gen
+  let env = Env screen camera world randList
+  app env
+
+data Env = Env
+  { envScreen   :: Screen
+  , envCamera   :: Camera
+  , envWorld    :: [Sphere]
+  , envRandList :: [Float]
+  }
+
+--EnvironmentHelpers
+getScreenWidth :: Env -> Int
+getScreenWidth env = screenWidth $ envScreen env
+
+getScreenHeight :: Env -> Int
+getScreenHeight env = screenHeight $ envScreen env
+
+getScreenSamples :: Env -> Int
+getScreenSamples env = screenSamples $ envScreen env
+
+getCamera :: Env -> Camera
+getCamera = envCamera
+
+getWorld :: Env -> [Sphere]
+getWorld = envWorld
+
+app :: Env -> IO ()
+app env = do
+  let ppm = render env
   printPPM ppm
+
+data Screen = Screen
+  { screenHeight   :: Int
+  , screenWidth    :: Int
+  , screenSamples  :: Int
+  }
 
 data PPM = PPM
   { width  :: Int
@@ -27,6 +74,14 @@ data Sphere = Sphere
   }
 
 data HitRecord = Hit Float (V3 Float) (V3 Float) | Miss -- Hit t p normal
+
+data Camera = Camera
+  { lowerLeftC  :: V3 Float
+  , horizontalC :: V3 Float
+  , verticalC   :: V3 Float
+  , originC     :: V3 Float
+  }
+
 --Functions for PPM
 printPPM :: PPM -> IO ()
 printPPM (PPM w h d) = do
@@ -55,31 +110,46 @@ color ray@(Ray _ d) spheres = case hitRecord of
   where hitRecord = hitSpheres'' spheres ray 0.0 maxFloat
         maxFloat = 100000.0 --This isn't right
 
---Standalone Things
-render :: Int -> Int -> PPM
-render x y = PPM x y $ renderData x y
+--Functions for Camera
+getRay :: Camera -> Float -> Float -> Ray --Camera u v ray
+getRay (Camera llc horz vert o) u v = Ray o (llc + u *^ horz + v*^vert - o)
 
-renderData :: Int -> Int -> [V3 Int]
-renderData x y = do
-  let lowerLeft = V3 (-2.0) (-1.0) (-1.0)
-  let horizontal = V3 4.0 0.0 0.0
-  let vertical = V3 0.0 2.0 0.0
-  let orgn = V3 0.0 0.0 0.0
-  let spheres =
-        [Sphere (V3 0.0 0.0 (-1.0)) 0.5
-        ,Sphere (V3 0.0 (-100.5) (-1.0)) 100
-        ]
+--Standalone Things
+render :: Env -> PPM
+render env = PPM x y $ renderData env
+  where x = getScreenHeight env
+        y = getScreenWidth env
+
+renderData :: Env -> [V3 Int]
+renderData env = do
   y' <- [y-1,y-2..0]
   x' <- [0..x-1]
  
-  let u = fromIntegral x' / fromIntegral x
-  let v = fromIntegral y' / fromIntegral y
-  let ray = Ray orgn (lowerLeft + u *^ horizontal + v *^ vertical)
-  let col = color ray spheres
+  let col = antialiasCol env x' y'
   let r = truncate $ 255.99 * col ^. _x
   let g = truncate $ 255.99 * col ^. _y
   let b = truncate $ 255.99 * col ^. _z
   return $ V3 r g b
+  where x = getScreenHeight env
+        y = getScreenWidth env
+
+antialiasCol :: Env -> Int -> Int -> V3 Float --env x' y' -> col
+antialiasCol env x' y' = antialiasCol' env x' y' s rs (V3 0.0 0.0 0.0) ^/ fromIntegral s
+  where s = getScreenSamples env
+        rs = envRandList env
+
+antialiasCol' :: Env -> Int -> Int -> Int -> [Float] -> V3 Float -> V3 Float --env x' y' s' rs curCol -> col
+antialiasCol' _ _ _ 0 _ curCol = curCol
+antialiasCol' env x' y' s' (randX:randY:rs) curCol = do
+  let u = (fromIntegral x' + randX) / fromIntegral x
+  let v = (fromIntegral y' + randY) / fromIntegral y
+  let r = getRay cam u v
+  let newCol = (color r spheres) + curCol
+  antialiasCol' env x' y' (s' - 1) rs newCol
+  where x       = getScreenHeight env
+        y       = getScreenWidth env
+        cam     = getCamera env
+        spheres = getWorld env
 
 hitSphere :: Sphere -> Ray -> Float -> Float -> HitRecord
 hitSphere sphere@(Sphere centerArg radiusArg) ray tMin tMax =
