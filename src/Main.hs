@@ -1,6 +1,11 @@
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Control.Lens
+import RIO
+import qualified RIO.Text as T
+
+--import Control.Lens
 import Linear.Metric
 import Linear.V3
 import Linear.Vector
@@ -21,13 +26,13 @@ main = do
   gen <- getStdGen
   let randList = randomRs (0.0,1.0) gen
   let env = Env screen camera world randList
-  app env
+  runRIO env app
 
 data Env = Env
-  { envScreen   :: Screen
-  , envCamera   :: Camera
-  , envWorld    :: [Sphere]
-  , envRandList :: [Float]
+  { envScreen   :: !Screen
+  , envCamera   :: !Camera
+  , envWorld    :: !World
+  , envRandList :: ![Float]
   }
 
 --EnvironmentHelpers
@@ -46,8 +51,10 @@ getCamera = envCamera
 getWorld :: Env -> [Sphere]
 getWorld = envWorld
 
-app :: Env -> IO ()
-app env = do
+--app :: Env -> IO ()
+app :: RIO Env ()
+app = do
+  env <- ask
   let ppm = render env
   printPPM ppm
 
@@ -58,41 +65,42 @@ data Screen = Screen
   }
 
 data PPM = PPM
-  { width  :: Int
-  , height :: Int
-  , dat    :: [V3 Int]
+  { ppmWidth  :: Int
+  , ppmHeight :: Int
+  , ppmDat    :: [V3 Int]
   }
 
 data Ray = Ray
-  { origin :: V3 Float
-  , direction :: V3 Float
+  { rayOrigin :: V3 Float
+  , rayDirection :: V3 Float
   }
 
 data Sphere = Sphere
-  { center :: V3 Float
-  , radius :: Float
+  { sphereCenter :: V3 Float
+  , sphereRadius :: Float
   }
+
+type World = [Sphere]
 
 data HitRecord = Hit Float (V3 Float) (V3 Float) | Miss -- Hit t p normal
 
 data Camera = Camera
-  { lowerLeftC  :: V3 Float
-  , horizontalC :: V3 Float
-  , verticalC   :: V3 Float
-  , originC     :: V3 Float
+  { cameraLowerLeft  :: V3 Float
+  , cameraHorizontal :: V3 Float
+  , cameraVertical   :: V3 Float
+  , cameraOrigin     :: V3 Float
   }
 
 --Functions for PPM
-printPPM :: PPM -> IO ()
+printPPM :: PPM -> RIO Env ()
 printPPM (PPM w h d) = do
-  putStrLn "P3"
-  putStrLn $ show  w <> " " <> show h
-  putStrLn "255"
+  let header = "P3\n" <> textDisplay w <> " " <> textDisplay h <> "\n255\n"
   let strDat = map prettyPrintV3 d
-  (putStrLn . unlines) strDat
+  let fileDat = header <> T.unlines strDat
+  writeFileUtf8 "./Testing.ppm" fileDat
 
-prettyPrintV3 :: Show a => V3 a -> String
-prettyPrintV3 (V3 x y z) = show x <> " " <> show y <> " " <> show z
+prettyPrintV3 :: V3 Int -> Text
+prettyPrintV3 (V3 x y z) = textDisplay x <> " " <> textDisplay y <> " " <> textDisplay z
 
 --Functions for Ray
 pointAtParam :: Ray -> Float -> V3 Float
@@ -144,7 +152,7 @@ antialiasCol' env x' y' s' (randX:randY:rs) curCol = do
   let u = (fromIntegral x' + randX) / fromIntegral x
   let v = (fromIntegral y' + randY) / fromIntegral y
   let r = getRay cam u v
-  let newCol = (color r spheres) + curCol
+  let newCol = color r spheres) + curCol
   antialiasCol' env x' y' (s' - 1) rs newCol
   where x       = getScreenHeight env
         y       = getScreenWidth env
@@ -160,9 +168,9 @@ hitSphere sphere@(Sphere centerArg radiusArg) ray tMin tMax =
   where negAnswer = (-b - sqrt discriminant) / a
         posAnswer = (-b + sqrt discriminant) / a
         discriminant = b*b - 4*a*c
-        oc = origin ray ^-^ centerArg
-        a = direction ray `dot` direction ray
-        b = 2.0 * (oc `dot` direction ray)
+        oc = rayOrigin ray ^-^ centerArg
+        a = rayDirection ray `dot` rayDirection ray
+        b = 2.0 * (oc `dot` rayDirection ray)
         c = oc `dot` oc - radiusArg * radiusArg
 
 mkHitRecord :: Ray -> Sphere -> Float -> HitRecord
