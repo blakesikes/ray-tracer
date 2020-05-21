@@ -152,7 +152,7 @@ antialiasCol' env x' y' s' (randX:randY:rs) curCol = do
   let u = (fromIntegral x' + randX) / fromIntegral x
   let v = (fromIntegral y' + randY) / fromIntegral y
   let r = getRay cam u v
-  let newCol = color r spheres) + curCol
+  let newCol = color r spheres + curCol
   antialiasCol' env x' y' (s' - 1) rs newCol
   where x       = getScreenHeight env
         y       = getScreenWidth env
