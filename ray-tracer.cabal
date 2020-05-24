@@ -21,3 +21,4 @@ executable ray-tracer
                       ,lens
                       ,linear
                       ,random
+                      ,rio

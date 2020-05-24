@@ -23,39 +23,33 @@ main = do
         [Sphere (V3 0.0 0.0 (-1.0)) 0.5
         ,Sphere (V3 0.0 (-100.5) (-1.0)) 100
         ]
-  gen <- getStdGen
-  let randList = randomRs (0.0,1.0) gen
-  let env = Env screen camera world randList
+  let env = Env screen camera world
   runRIO env app
 
 data Env = Env
   { envScreen   :: !Screen
   , envCamera   :: !Camera
   , envWorld    :: !World
-  , envRandList :: ![Float]
   }
 
---EnvironmentHelpers
-getScreenWidth :: Env -> Int
-getScreenWidth env = screenWidth $ envScreen env
+class HasScreen env where
+  screenL :: Lens' env Screen
+instance HasScreen Screen where
+  screenL = id
+instance HasScreen Env where
+  screenL = lens envScreen (\x y -> x { envScreen = y })
 
-getScreenHeight :: Env -> Int
-getScreenHeight env = screenHeight $ envScreen env
-
-getScreenSamples :: Env -> Int
-getScreenSamples env = screenSamples $ envScreen env
-
-getCamera :: Env -> Camera
-getCamera = envCamera
-
-getWorld :: Env -> [Sphere]
-getWorld = envWorld
+class HasCamera env where
+  cameraL :: Lens' env Camera
+instance HasCamera Camera where
+  cameraL = id
+instance HasCamera Env where
+  cameraL = lens envCamera (\x y -> x { envCamera = y })
 
 --app :: Env -> IO ()
 app :: RIO Env ()
 app = do
-  env <- ask
-  let ppm = render env
+  ppm <- render
   printPPM ppm
 
 data Screen = Screen
@@ -91,6 +85,10 @@ data Camera = Camera
   , cameraOrigin     :: V3 Float
   }
 
+--Random Functions
+getRand :: RIO Env Float
+getRand = liftIO $ randomRIO (0.0,1.0)
+
 --Functions for PPM
 printPPM :: PPM -> RIO Env ()
 printPPM (PPM w h d) = do
@@ -123,41 +121,51 @@ getRay :: Camera -> Float -> Float -> Ray --Camera u v ray
 getRay (Camera llc horz vert o) u v = Ray o (llc + u *^ horz + v*^vert - o)
 
 --Standalone Things
-render :: Env -> PPM
-render env = PPM x y $ renderData env
-  where x = getScreenHeight env
-        y = getScreenWidth env
+render :: RIO Env PPM
+render = do
+  env <- ask
+  let Screen x y _samples = envScreen env
+  PPM x y <$> renderData
 
-renderData :: Env -> [V3 Int]
-renderData env = do
-  y' <- [y-1,y-2..0]
-  x' <- [0..x-1]
- 
-  let col = antialiasCol env x' y'
-  let r = truncate $ 255.99 * col ^. _x
-  let g = truncate $ 255.99 * col ^. _y
-  let b = truncate $ 255.99 * col ^. _z
-  return $ V3 r g b
-  where x = getScreenHeight env
-        y = getScreenWidth env
+screenPixels :: Int -> Int -> [(Int,Int)]
+screenPixels w h = do
+  y <- [h-1,h-2..0]
+  x <- [0..w-1]
+  return (x,y)
 
-antialiasCol :: Env -> Int -> Int -> V3 Float --env x' y' -> col
-antialiasCol env x' y' = antialiasCol' env x' y' s rs (V3 0.0 0.0 0.0) ^/ fromIntegral s
-  where s = getScreenSamples env
-        rs = envRandList env
+renderData ::  RIO Env [V3 Int]
+renderData = do
+  Screen x y _s <- view screenL
+  let pixels = screenPixels x y
 
-antialiasCol' :: Env -> Int -> Int -> Int -> [Float] -> V3 Float -> V3 Float --env x' y' s' rs curCol -> col
-antialiasCol' _ _ _ 0 _ curCol = curCol
-antialiasCol' env x' y' s' (randX:randY:rs) curCol = do
+  cols <- sequence $ antialiasCol <$> pixels
+  let rgb = pixelToRGB <$> cols
+  return rgb
+
+pixelToRGB :: V3 Float -> V3 Int
+pixelToRGB col = V3 r g b
+  where r = truncate $ 255.99 * col ^. _x
+        g = truncate $ 255.99 * col ^. _y
+        b = truncate $ 255.99 * col ^. _z
+
+antialiasCol ::  (Int,Int) -> RIO Env (V3 Float) --env x' y' -> col
+antialiasCol (x',y') = do
+  Screen _w _h s <- view screenL
+  antialiasCol' x' y' s (V3 0.0 0.0 0.0) ^/ fromIntegral s
+
+antialiasCol' :: Int -> Int -> Int -> V3 Float -> RIO Env (V3 Float) --env x' y' s' rs curCol -> col
+antialiasCol' _ _ 0 curCol = pure curCol
+antialiasCol' x' y' s' curCol = do
+  Screen x y _s <- view screenL
+  cam <- view cameraL
+  Env _s _c world <- ask
+  randX <- getRand
+  randY <- getRand
   let u = (fromIntegral x' + randX) / fromIntegral x
   let v = (fromIntegral y' + randY) / fromIntegral y
   let r = getRay cam u v
-  let newCol = color r spheres + curCol
-  antialiasCol' env x' y' (s' - 1) rs newCol
-  where x       = getScreenHeight env
-        y       = getScreenWidth env
-        cam     = getCamera env
-        spheres = getWorld env
+  let newCol = color r world + curCol
+  antialiasCol' x' y' (s' - 1) newCol
 
 hitSphere :: Sphere -> Ray -> Float -> Float -> HitRecord
 hitSphere sphere@(Sphere centerArg radiusArg) ray tMin tMax =
