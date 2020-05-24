@@ -5,6 +5,8 @@ module Main where
 import RIO
 import qualified RIO.Text as T
 
+import Types
+
 --import Control.Lens
 import Linear.Metric
 import Linear.V3
@@ -26,64 +28,11 @@ main = do
   let env = Env screen camera world
   runRIO env app
 
-data Env = Env
-  { envScreen   :: !Screen
-  , envCamera   :: !Camera
-  , envWorld    :: !World
-  }
-
-class HasScreen env where
-  screenL :: Lens' env Screen
-instance HasScreen Screen where
-  screenL = id
-instance HasScreen Env where
-  screenL = lens envScreen (\x y -> x { envScreen = y })
-
-class HasCamera env where
-  cameraL :: Lens' env Camera
-instance HasCamera Camera where
-  cameraL = id
-instance HasCamera Env where
-  cameraL = lens envCamera (\x y -> x { envCamera = y })
-
 --app :: Env -> IO ()
 app :: RIO Env ()
 app = do
   ppm <- render
   printPPM ppm
-
-data Screen = Screen
-  { screenHeight   :: Int
-  , screenWidth    :: Int
-  , screenSamples  :: Int
-  }
-
-data PPM = PPM
-  { ppmWidth  :: Int
-  , ppmHeight :: Int
-  , ppmDat    :: [V3 Int]
-  }
-
-data Ray = Ray
-  { rayOrigin :: V3 Float
-  , rayDirection :: V3 Float
-  }
-
-data Sphere = Sphere
-  { sphereCenter :: V3 Float
-  , sphereRadius :: Float
-  }
-
-type World = [Sphere]
-
-data HitRecord = Hit Float (V3 Float) (V3 Float) | Miss -- Hit t p normal
-
-data Camera = Camera
-  { cameraLowerLeft  :: V3 Float
-  , cameraHorizontal :: V3 Float
-  , cameraVertical   :: V3 Float
-  , cameraOrigin     :: V3 Float
-  }
 
 --Random Functions
 getRand :: RIO Env Float
@@ -148,12 +97,12 @@ pixelToRGB col = V3 r g b
         g = truncate $ 255.99 * col ^. _y
         b = truncate $ 255.99 * col ^. _z
 
-antialiasCol ::  (Int,Int) -> RIO Env (V3 Float) --env x' y' -> col
+antialiasCol ::  (Int,Int) -> RIO Env (V3 Float) --(x, y) -> col
 antialiasCol (x',y') = do
   Screen _w _h s <- view screenL
   antialiasCol' x' y' s (V3 0.0 0.0 0.0) ^/ fromIntegral s
 
-antialiasCol' :: Int -> Int -> Int -> V3 Float -> RIO Env (V3 Float) --env x' y' s' rs curCol -> col
+antialiasCol' :: Int -> Int -> Int -> V3 Float -> RIO Env (V3 Float) --x y s curCol -> col
 antialiasCol' _ _ 0 curCol = pure curCol
 antialiasCol' x' y' s' curCol = do
   Screen x y _s <- view screenL
