@@ -1,6 +1,13 @@
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Control.Lens
+import RIO
+import qualified RIO.Text as T
+
+import Types
+
+--import Control.Lens
 import Linear.Metric
 import Linear.V3
 import Linear.Vector
@@ -18,81 +25,29 @@ main = do
         [Sphere (V3 0.0 0.0 (-1.0)) 0.5
         ,Sphere (V3 0.0 (-100.5) (-1.0)) 100
         ]
-  gen <- getStdGen
-  let randList = randomRs (0.0,1.0) gen
-  let env = Env screen camera world randList
-  app env
+  let env = Env screen camera world
+  runRIO env app
 
-data Env = Env
-  { envScreen   :: Screen
-  , envCamera   :: Camera
-  , envWorld    :: [Sphere]
-  , envRandList :: [Float]
-  }
-
---EnvironmentHelpers
-getScreenWidth :: Env -> Int
-getScreenWidth env = screenWidth $ envScreen env
-
-getScreenHeight :: Env -> Int
-getScreenHeight env = screenHeight $ envScreen env
-
-getScreenSamples :: Env -> Int
-getScreenSamples env = screenSamples $ envScreen env
-
-getCamera :: Env -> Camera
-getCamera = envCamera
-
-getWorld :: Env -> [Sphere]
-getWorld = envWorld
-
-app :: Env -> IO ()
-app env = do
-  let ppm = render env
+--app :: Env -> IO ()
+app :: RIO Env ()
+app = do
+  ppm <- render
   printPPM ppm
 
-data Screen = Screen
-  { screenHeight   :: Int
-  , screenWidth    :: Int
-  , screenSamples  :: Int
-  }
-
-data PPM = PPM
-  { width  :: Int
-  , height :: Int
-  , dat    :: [V3 Int]
-  }
-
-data Ray = Ray
-  { origin :: V3 Float
-  , direction :: V3 Float
-  }
-
-data Sphere = Sphere
-  { center :: V3 Float
-  , radius :: Float
-  }
-
-data HitRecord = Hit Float (V3 Float) (V3 Float) | Miss -- Hit t p normal
-
-data Camera = Camera
-  { lowerLeftC  :: V3 Float
-  , horizontalC :: V3 Float
-  , verticalC   :: V3 Float
-  , originC     :: V3 Float
-  }
+--Random Functions
+getRand :: RIO Env Float
+getRand = liftIO $ randomRIO (0.0,1.0)
 
 --Functions for PPM
-printPPM :: PPM -> IO ()
+printPPM :: PPM -> RIO Env ()
 printPPM (PPM w h d) = do
-  putStrLn "P3"
-  putStrLn $ show  w <> " " <> show h
-  putStrLn "255"
+  let header = "P3\n" <> textDisplay w <> " " <> textDisplay h <> "\n255\n"
   let strDat = map prettyPrintV3 d
-  (putStrLn . unlines) strDat
+  let fileDat = header <> T.unlines strDat
+  writeFileUtf8 "./Testing.ppm" fileDat
 
-prettyPrintV3 :: Show a => V3 a -> String
-prettyPrintV3 (V3 x y z) = show x <> " " <> show y <> " " <> show z
+prettyPrintV3 :: V3 Int -> Text
+prettyPrintV3 (V3 x y z) = textDisplay x <> " " <> textDisplay y <> " " <> textDisplay z
 
 --Functions for Ray
 pointAtParam :: Ray -> Float -> V3 Float
@@ -115,41 +70,51 @@ getRay :: Camera -> Float -> Float -> Ray --Camera u v ray
 getRay (Camera llc horz vert o) u v = Ray o (llc + u *^ horz + v*^vert - o)
 
 --Standalone Things
-render :: Env -> PPM
-render env = PPM x y $ renderData env
-  where x = getScreenHeight env
-        y = getScreenWidth env
+render :: RIO Env PPM
+render = do
+  env <- ask
+  let Screen x y _samples = envScreen env
+  PPM x y <$> renderData
 
-renderData :: Env -> [V3 Int]
-renderData env = do
-  y' <- [y-1,y-2..0]
-  x' <- [0..x-1]
- 
-  let col = antialiasCol env x' y'
-  let r = truncate $ 255.99 * col ^. _x
-  let g = truncate $ 255.99 * col ^. _y
-  let b = truncate $ 255.99 * col ^. _z
-  return $ V3 r g b
-  where x = getScreenHeight env
-        y = getScreenWidth env
+screenPixels :: Int -> Int -> [(Int,Int)]
+screenPixels w h = do
+  y <- [h-1,h-2..0]
+  x <- [0..w-1]
+  return (x,y)
 
-antialiasCol :: Env -> Int -> Int -> V3 Float --env x' y' -> col
-antialiasCol env x' y' = antialiasCol' env x' y' s rs (V3 0.0 0.0 0.0) ^/ fromIntegral s
-  where s = getScreenSamples env
-        rs = envRandList env
+renderData ::  RIO Env [V3 Int]
+renderData = do
+  Screen x y _s <- view screenL
+  let pixels = screenPixels x y
 
-antialiasCol' :: Env -> Int -> Int -> Int -> [Float] -> V3 Float -> V3 Float --env x' y' s' rs curCol -> col
-antialiasCol' _ _ _ 0 _ curCol = curCol
-antialiasCol' env x' y' s' (randX:randY:rs) curCol = do
+  cols <- sequence $ antialiasCol <$> pixels
+  let rgb = pixelToRGB <$> cols
+  return rgb
+
+pixelToRGB :: V3 Float -> V3 Int
+pixelToRGB col = V3 r g b
+  where r = truncate $ 255.99 * col ^. _x
+        g = truncate $ 255.99 * col ^. _y
+        b = truncate $ 255.99 * col ^. _z
+
+antialiasCol ::  (Int,Int) -> RIO Env (V3 Float) --(x, y) -> col
+antialiasCol (x',y') = do
+  Screen _w _h s <- view screenL
+  antialiasCol' x' y' s (V3 0.0 0.0 0.0) ^/ fromIntegral s
+
+antialiasCol' :: Int -> Int -> Int -> V3 Float -> RIO Env (V3 Float) --x y s curCol -> col
+antialiasCol' _ _ 0 curCol = pure curCol
+antialiasCol' x' y' s' curCol = do
+  Screen x y _s <- view screenL
+  cam <- view cameraL
+  Env _s _c world <- ask
+  randX <- getRand
+  randY <- getRand
   let u = (fromIntegral x' + randX) / fromIntegral x
   let v = (fromIntegral y' + randY) / fromIntegral y
   let r = getRay cam u v
-  let newCol = (color r spheres) + curCol
-  antialiasCol' env x' y' (s' - 1) rs newCol
-  where x       = getScreenHeight env
-        y       = getScreenWidth env
-        cam     = getCamera env
-        spheres = getWorld env
+  let newCol = color r world + curCol
+  antialiasCol' x' y' (s' - 1) newCol
 
 hitSphere :: Sphere -> Ray -> Float -> Float -> HitRecord
 hitSphere sphere@(Sphere centerArg radiusArg) ray tMin tMax =
@@ -160,9 +125,9 @@ hitSphere sphere@(Sphere centerArg radiusArg) ray tMin tMax =
   where negAnswer = (-b - sqrt discriminant) / a
         posAnswer = (-b + sqrt discriminant) / a
         discriminant = b*b - 4*a*c
-        oc = origin ray ^-^ centerArg
-        a = direction ray `dot` direction ray
-        b = 2.0 * (oc `dot` direction ray)
+        oc = rayOrigin ray ^-^ centerArg
+        a = rayDirection ray `dot` rayDirection ray
+        b = 2.0 * (oc `dot` rayDirection ray)
         c = oc `dot` oc - radiusArg * radiusArg
 
 mkHitRecord :: Ray -> Sphere -> Float -> HitRecord
